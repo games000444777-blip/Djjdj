@@ -1,6 +1,7 @@
-# meta developer: @tordkor
+# meta developer: @tord_kor
 
 from .. import loader, utils
+from telethon import events
 import asyncio
 import logging
 
@@ -18,7 +19,8 @@ class MineEvoAutoMod(loader.Module):
     
     def __init__(self):
         self.running = False
-        self.task = None
+        self.handler_new = None
+        self.handler_edit = None
     
     async def client_ready(self, client, db):
         self.client = client
@@ -33,80 +35,75 @@ class MineEvoAutoMod(loader.Module):
         
         self.running = True
         await utils.answer(message, self.strings["started"])
-        self.task = asyncio.ensure_future(self._watch_mineevo())
+        
+        try:
+            entity = await self.client.get_entity("@mineevo")
+            chat_id = entity.id
+            
+            logger.info(f"✅ Найден @mineevo, ID: {chat_id}")
+            
+            # Функция обработки сообщения (одна для всех)
+            async def process_message(event):
+                if not self.running:
+                    return
+                
+                text = event.message.text or ""
+                msg_type = "✏️ EDIT" if hasattr(event, 'message') and event.message.edit_date else "📨 NEW"
+                
+                logger.info(f"{msg_type}: {text[:100]}")
+                
+                if event.message.reply_markup:
+                    for row in event.message.reply_markup.rows:
+                        for button in row.buttons:
+                            callback_data = getattr(button, 'data', b'').decode('utf-8')
+                            button_text = getattr(button, 'text', '')
+                            
+                            logger.info(f"🔘 '{button_text}' -> {callback_data}")
+                            
+                            # Собираем
+                            if "mine_collect" in callback_data:
+                                logger.info(f"💎 СОБИРАЮ!")
+                                await event.message.click(data=callback_data)
+                                await asyncio.sleep(2)
+                            
+                            # Перезапускаем
+                            if "mine_start" in callback_data:
+                                logger.info(f"🔄 ПЕРЕЗАПУСКАЮ!")
+                                await event.message.click(data=callback_data)
+                                await asyncio.sleep(2)
+            
+            # Обработчик НОВЫХ сообщений
+            @self.client.on(events.NewMessage(chats=chat_id))
+            async def handler_new(event):
+                await process_message(event)
+            
+            # Обработчик РЕДАКТИРОВАНИЯ сообщений
+            @self.client.on(events.MessageEdited(chats=chat_id))
+            async def handler_edit(event):
+                await process_message(event)
+            
+            self.handler_new = handler_new
+            self.handler_edit = handler_edit
+            
+            logger.info("✅ Слушаю НОВЫЕ и РЕДАКТИРУЕМЫЕ сообщения от @mineevo")
+        
+        except Exception as e:
+            logger.error(f"❌ Ошибка при запуске: {e}")
+            import traceback
+            traceback.print_exc()
     
     @loader.command()
     async def stop(self, message):
         """Остановить автосбор"""
         self.running = False
-        if self.task:
-            self.task.cancel()
-        await utils.answer(message, self.strings["stopped"])
-    
-    async def _watch_mineevo(self):
-        try:
-            logger.info("🔍 Ищу @mineevo...")
-            
-            entity = await self.client.get_entity("@mineevo")
-            chat_id = entity.id
-            logger.info(f"✅ Найден! ID: {chat_id}")
-            
-            # Сразу проверяем последние 10 сообщений (на случай, если уже есть "Копание завершено")
-            logger.info("🔍 Проверяю последние сообщения...")
-            await self._check_messages(chat_id, limit=10)
-            
-            # Запоминаем ID последнего сообщения
-            last_msg_id = 0
-            async for msg in self.client.iter_messages(chat_id, limit=1):
-                last_msg_id = msg.id
-            
-            logger.info(f"✅ Слежу. Последнее сообщение: {last_msg_id}")
-            
-            # Основной цикл
-            while self.running:
-                await asyncio.sleep(3)
-                
-                try:
-                    # Проверяем только НОВЫЕ сообщения
-                    await self._check_messages(chat_id, min_id=last_msg_id, limit=10)
-                    
-                    # Обновляем last_msg_id
-                    async for msg in self.client.iter_messages(chat_id, limit=1):
-                        last_msg_id = msg.id
-                        break
-                
-                except Exception as e:
-                    logger.error(f"Ошибка: {e}")
-                    await asyncio.sleep(5)
         
-        except Exception as e:
-            logger.error(f"Критическая ошибка: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    async def _check_messages(self, chat_id, min_id=0, limit=10):
-        """Проверяет сообщения и жмёт кнопки"""
-        async for msg in self.client.iter_messages(chat_id, min_id=min_id, limit=limit):
-            text = msg.text or ""
-            
-            logger.info(f"📨 [{msg.id}] {text[:100]}")
-            
-            if msg.reply_markup:
-                for row in msg.reply_markup.rows:
-                    for button in row.buttons:
-                        callback_data = getattr(button, 'data', b'').decode('utf-8')
-                        button_text = getattr(button, 'text', '')
-                        
-                        logger.info(f"🔘 '{button_text}' -> {callback_data}")
-                        
-                        # Собираем
-                        if "mine_collect" in callback_data:
-                            logger.info(f"💎 СОБИРАЮ!")
-                            await msg.click(data=callback_data)
-                            await asyncio.sleep(2)
-                        
-                        # Перезапускаем
-                        if "mine_start" in callback_data:
-                            logger.info(f"🔄 ПЕРЕЗАПУСКАЮ!")
-                            await msg.click(data=callback_data)
-                            await asyncio.sleep(2)
+        # Удаляем обработчики
+        if self.handler_new:
+            self.client.remove_event_handler(self.handler_new)
+            self.handler_new = None
+        
+        if self.handler_edit:
+            self.client.remove_event_handler(self.handler_edit)
+            self.handler_edit = None
+        
+        await utils.answer(message, self.strings["stopped"])
