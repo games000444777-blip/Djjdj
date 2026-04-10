@@ -1,26 +1,64 @@
-from pyrogram import Client, filters
-from pyrogram.types import Message
+# meta developer: @tordkor
+# meta banner: https://i.imgur.com/mineevo.png
+
+from .. import loader, utils
 import asyncio
 
-async def auto_mineevo(client: Client):
-    print("AutoMineEvo запущен — жду сбор")
-
-    @client.on_message(filters.user("mineEvo"))
-    async def handle(c: Client, m: Message):
-        text = m.text or ""
-        if "копание завершено" in text.lower() or "собери ресурсы" in text.lower():
-            print("Обнаружен сбор — кликаю...")
-            await asyncio.sleep(1.5)
-            if m.reply_markup:
-                for row in m.reply_markup.inline_keyboard:
-                    for button in row:
-                        if "собрать" in button.text.lower():
-                            try:
-                                await m.click(button.text)
-                                print("Собрал ресурсы!")
-                                return
-                            except:
-                                pass
-
-def setup(client: Client):
-    asyncio.create_task(auto_mineevo(client))
+@loader.tds
+class MineEvoAutoMod(loader.Module):
+    """Автосбор шахт для @mineEvo бота"""
+    
+    strings = {
+        "name": "MineEvoAuto",
+        "started": "✅ Автосбор mineEvo запущен",
+        "stopped": "❌ Автосбор mineEvo остановлен",
+        "collected": "💎 Собрал ресурсы!"
+    }
+    
+    def __init__(self):
+        self.running = False
+    
+    async def client_ready(self, client, db):
+        self.client = client
+        self.db = db
+    
+    @loader.command()
+    async def start(self, message):
+        """Запустить автосбор"""
+        self.running = True
+        await utils.answer(message, self.strings["started"])
+        asyncio.create_task(self._watch_mineevo())
+    
+    @loader.command()
+    async def stop(self, message):
+        """Остановить автосбор"""
+        self.running = False
+        await utils.answer(message, self.strings["stopped"])
+    
+    async def _watch_mineevo(self):
+        """Слушает сообщения от mineEvo"""
+        async for dialog in self.client.iter_dialogs():
+            if dialog.entity.username == "mineEvo":
+                chat_id = dialog.id
+                break
+        else:
+            return
+        
+        async for message in self.client.iter_messages(chat_id, limit=1):
+            last_msg_id = message.id
+        
+        while self.running:
+            await asyncio.sleep(3)
+            
+            async for msg in self.client.iter_messages(chat_id, min_id=last_msg_id, limit=10):
+                last_msg_id = msg.id
+                
+                if msg.text and ("копание завершено" in msg.text.lower() or "собери ресурсы" in msg.text.lower()):
+                    if msg.reply_markup:
+                        for row in msg.reply_markup.rows:
+                            for button in row.buttons:
+                                if "собрать" in button.text.lower():
+                                    await msg.click(0)  # кликаем первую кнопку
+                                    print(self.strings["collected"])
+                                    await asyncio.sleep(2)
+                                    break
