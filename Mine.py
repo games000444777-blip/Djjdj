@@ -1,5 +1,4 @@
 # meta developer: @tordkor
-# meta banner: https://i.imgur.com/mineevo.png
 
 from .. import loader, utils
 import asyncio
@@ -12,7 +11,8 @@ class MineEvoAutoMod(loader.Module):
         "name": "MineEvoAuto",
         "started": "✅ Автосбор mineEvo запущен",
         "stopped": "❌ Автосбор mineEvo остановлен",
-        "collected": "💎 Собрал ресурсы!"
+        "collected": "💎 Собрал ресурсы!",
+        "restarted": "🔄 Запустил добычу заново!"
     }
     
     def __init__(self):
@@ -37,28 +37,61 @@ class MineEvoAutoMod(loader.Module):
     
     async def _watch_mineevo(self):
         """Слушает сообщения от mineEvo"""
+        
+        # Ищем чат с mineEvo
+        chat_id = None
         async for dialog in self.client.iter_dialogs():
-            if dialog.entity.username == "mineEvo":
+            entity = dialog.entity
+            username = getattr(entity, 'username', None)
+            if username and username.lower() == "mineevo":
                 chat_id = dialog.id
                 break
-        else:
+        
+        if not chat_id:
+            print("❌ Чат с @mineEvo не найден")
             return
         
+        # Получаем последнее сообщение
+        last_msg_id = 0
         async for message in self.client.iter_messages(chat_id, limit=1):
             last_msg_id = message.id
         
+        print(f"✅ Слежу за чатом mineEvo (id: {chat_id})")
+        
         while self.running:
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
             
-            async for msg in self.client.iter_messages(chat_id, min_id=last_msg_id, limit=10):
-                last_msg_id = msg.id
-                
-                if msg.text and ("копание завершено" in msg.text.lower() or "собери ресурсы" in msg.text.lower()):
-                    if msg.reply_markup:
-                        for row in msg.reply_markup.rows:
-                            for button in row.buttons:
-                                if "собрать" in button.text.lower():
-                                    await msg.click(0)  # кликаем первую кнопку
-                                    print(self.strings["collected"])
-                                    await asyncio.sleep(2)
+            try:
+                async for msg in self.client.iter_messages(chat_id, min_id=last_msg_id, limit=10):
+                    last_msg_id = msg.id
+                    text = msg.text or ""
+                    
+                    if "копание завершено" in text.lower() or "собери ресурсы" in text.lower():
+                        if msg.reply_markup:
+                            collected = False
+                            restarted = False
+                            
+                            for row in msg.reply_markup.rows:
+                                for button in row.buttons:
+                                    callback_data = getattr(button, 'data', b'').decode('utf-8')
+                                    
+                                    # Собираем ресурсы
+                                    if "mine_collect" in callback_data and not collected:
+                                        await msg.click(data=callback_data)
+                                        print(self.strings["collected"])
+                                        collected = True
+                                        await asyncio.sleep(1.5)
+                                    
+                                    # Запускаем добычу заново
+                                    if "mine_start" in callback_data and collected and not restarted:
+                                        await msg.click(data=callback_data)
+                                        print(self.strings["restarted"])
+                                        restarted = True
+                                        await asyncio.sleep(2)
+                                        break
+                                
+                                if restarted:
                                     break
+            except Exception as e:
+                print(f"Ошибка: {e}")
+                await asyncio.sleep(5)
