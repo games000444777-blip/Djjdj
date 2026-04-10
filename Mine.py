@@ -54,27 +54,36 @@ class MineEvoAutoMod(loader.Module):
         try:
             logger.info("🔍 Ищу чат с mineEvo...")
             
-            # Ищем чат с mineEvo
-            chat_id = None
-            async for dialog in self.client.iter_dialogs():
-                entity = dialog.entity
-                username = getattr(entity, 'username', None)
+            # Пробуем найти напрямую по юзернейму
+            try:
+                entity = await self.client.get_entity("@mineevo")
+                chat_id = entity.id
+                logger.info(f"✅ Найден бот mineEvo напрямую! ID: {chat_id}")
+            except Exception as e:
+                logger.error(f"❌ Не удалось найти @mineevo напрямую: {e}")
                 
-                if username and username.lower() == "mineevo":
-                    chat_id = dialog.id
-                    logger.info(f"✅ Найден чат mineEvo: {chat_id}")
-                    break
-            
-            if not chat_id:
-                logger.error("❌ Чат с @mineEvo не найден!")
-                return
+                # Пробуем найти в диалогах
+                chat_id = None
+                async for dialog in self.client.iter_dialogs():
+                    ent = dialog.entity
+                    username = getattr(ent, 'username', None)
+                    logger.info(f"Проверяю: {username}")
+                    
+                    if username and username.lower() == "mineevo":
+                        chat_id = dialog.id
+                        logger.info(f"✅ Найден в диалогах: {chat_id}")
+                        break
+                
+                if not chat_id:
+                    logger.error("❌ Чат с @mineEvo вообще не найден!")
+                    return
             
             # Получаем последнее сообщение
             last_msg_id = 0
             async for msg in self.client.iter_messages(chat_id, limit=1):
                 last_msg_id = msg.id
             
-            logger.info(f"✅ Начинаю слежку. Последнее сообщение: {last_msg_id}")
+            logger.info(f"✅ Начинаю слежку за {chat_id}. Последнее сообщение: {last_msg_id}")
             
             while self.running:
                 await asyncio.sleep(3)
@@ -85,39 +94,28 @@ class MineEvoAutoMod(loader.Module):
                         text = msg.text or ""
                         text_lower = text.lower()
                         
-                        logger.info(f"📨 Новое сообщение: {text[:80]}")
+                        logger.info(f"📨 [{msg.id}] {text[:80]}")
                         
-                        # Проверяем все варианты написания
-                        if any(keyword in text_lower for keyword in [
-                            "копание завершено",
-                            "собери ресурсы",
-                            "завершено"
-                        ]):
+                        if any(kw in text_lower for kw in ["копание завершено", "собери ресурсы", "завершено"]):
                             logger.info("🎯 ОБНАРУЖЕН СБОР!")
                             
                             if msg.reply_markup:
-                                logger.info(f"🔘 Кнопок: {len(msg.reply_markup.rows)}")
-                                
                                 for row in msg.reply_markup.rows:
                                     for button in row.buttons:
                                         callback_data = getattr(button, 'data', b'').decode('utf-8')
                                         button_text = getattr(button, 'text', '')
                                         
-                                        logger.info(f"🔘 Кнопка: '{button_text}' | {callback_data}")
+                                        logger.info(f"🔘 '{button_text}' | {callback_data}")
                                         
-                                        # Собираем
                                         if "mine_collect" in callback_data:
                                             logger.info(f"💎 СОБИРАЮ!")
                                             await msg.click(data=callback_data)
                                             await asyncio.sleep(2)
                                         
-                                        # Перезапускаем
                                         if "mine_start" in callback_data:
                                             logger.info(f"🔄 ПЕРЕЗАПУСКАЮ!")
                                             await msg.click(data=callback_data)
                                             await asyncio.sleep(2)
-                            else:
-                                logger.warning("❌ Кнопок нет!")
                 
                 except Exception as e:
                     logger.error(f"Ошибка в цикле: {e}")
